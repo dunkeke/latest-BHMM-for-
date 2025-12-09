@@ -1,0 +1,9 @@
+akshare
+yfinance 
+hmmlearn 
+plotly
+numpy
+pandas
+streamlit
+concurrent.futures
+tqdm
