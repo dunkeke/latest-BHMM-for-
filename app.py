@@ -1,6 +1,3 @@
-# app.py (修复网络问题)
-[file name]: app.py
-[file content begin]
 import streamlit as st
 import numpy as np
 import pandas as pd
@@ -723,4 +720,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-[file content end]
+
