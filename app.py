@@ -13,7 +13,7 @@ import requests
 from hmmlearn.hmm import GaussianHMM
 from typing import List, Tuple, Dict, Optional
 import concurrent.futures
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from tenacity import retry, stop_after_attempt, wait_exponential
 import json
 
 # ==========================================
@@ -60,178 +60,35 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 1. 智能数据获取系统 (多重后备方案)
+# 1. 智能数据获取系统
 # ==========================================
 
 class DataFetcher:
-    """智能数据获取器，支持多重后备方案"""
+    """智能数据获取器"""
     
     def __init__(self):
         self.cache_dir = ".data_cache"
         os.makedirs(self.cache_dir, exist_ok=True)
         
-        # 预定义A股龙头股数据库
-        self._init_predefined_stocks()
+    def format_ticker_for_yfinance(self, raw_code: str, raw_name: str = "Unknown") -> Tuple[str, str]:
+        """格式化股票代码为yfinance格式"""
+        raw_code = str(raw_code).strip()
         
-    def _init_predefined_stocks(self):
-        """初始化预定义股票数据库"""
-        # 扩展的A股龙头股列表 (300+只)
-        self.predefined_stocks = {
-            # 白酒
-            "白酒": [
-                ("000858", "五粮液", 130.5, 1500),
-                ("600519", "贵州茅台", 1600.0, 20000),
-                ("002304", "洋河股份", 85.3, 1200),
-                ("000568", "泸州老窖", 180.2, 2600),
-                ("600809", "山西汾酒", 210.5, 2500),
-            ],
-            # 半导体
-            "半导体": [
-                ("688981", "中芯国际", 45.6, 3500),
-                ("002049", "紫光国微", 85.4, 700),
-                ("603501", "韦尔股份", 95.2, 1100),
-                ("300661", "圣邦股份", 120.8, 500),
-                ("002371", "北方华创", 280.5, 1500),
-                ("600703", "三安光电", 15.2, 700),
-                ("300782", "卓胜微", 85.6, 400),
-            ],
-            # 新能源
-            "新能源": [
-                ("300750", "宁德时代", 180.5, 8000),
-                ("002594", "比亚迪", 210.3, 6000),
-                ("002812", "恩捷股份", 45.6, 400),
-                ("002460", "赣锋锂业", 35.8, 600),
-                ("300014", "亿纬锂能", 38.9, 700),
-                ("002709", "天赐材料", 22.5, 400),
-                ("300450", "先导智能", 25.6, 400),
-            ],
-            # 医药
-            "医药": [
-                ("600276", "恒瑞医药", 42.8, 2700),
-                ("300760", "迈瑞医疗", 285.6, 3500),
-                ("300015", "爱尔眼科", 15.2, 1400),
-                ("000538", "云南白药", 52.4, 900),
-                ("600085", "同仁堂", 45.6, 600),
-                ("600436", "片仔癀", 240.5, 1400),
-                ("300347", "泰格医药", 52.3, 400),
-            ],
-            # 金融
-            "金融": [
-                ("601318", "中国平安", 42.5, 7500),
-                ("600036", "招商银行", 32.8, 8000),
-                ("601398", "工商银行", 4.9, 17000),
-                ("601166", "兴业银行", 15.6, 3200),
-                ("600030", "中信证券", 22.4, 3300),
-                ("000776", "广发证券", 14.2, 1100),
-                ("601601", "中国太保", 23.5, 2200),
-            ],
-            # 消费
-            "消费": [
-                ("600887", "伊利股份", 28.5, 1800),
-                ("000651", "格力电器", 35.6, 2000),
-                ("000333", "美的集团", 58.9, 4000),
-                ("603288", "海天味业", 35.8, 2000),
-                ("002557", "洽洽食品", 32.4, 200),
-                ("300146", "汤臣倍健", 18.9, 300),
-                ("603866", "桃李面包", 7.2, 100),
-            ],
-            # 科技
-            "科技": [
-                ("002415", "海康威视", 32.5, 3000),
-                ("002475", "立讯精密", 28.9, 2000),
-                ("300059", "东方财富", 13.2, 2100),
-                ("300033", "同花顺", 105.6, 500),
-                ("002230", "科大讯飞", 45.8, 1000),
-                ("000977", "浪潮信息", 32.5, 500),
-                ("600570", "恒生电子", 25.6, 500),
-            ],
-            # 光伏
-            "光伏设备": [
-                ("601012", "隆基绿能", 18.5, 1400),
-                ("300274", "阳光电源", 75.6, 1100),
-                ("002129", "TCL中环", 12.8, 400),
-                ("688303", "大全能源", 25.4, 500),
-                ("300118", "东方日升", 14.2, 200),
-                ("603806", "福斯特", 28.9, 500),
-            ],
-            # 汽车
-            "汽车整车": [
-                ("601633", "长城汽车", 23.5, 2000),
-                ("600104", "上汽集团", 14.2, 1600),
-                ("000625", "长安汽车", 14.8, 1500),
-                ("002594", "比亚迪", 210.3, 6000),
-                ("601238", "广汽集团", 8.9, 900),
-            ],
-            # 军工
-            "军工": [
-                ("600893", "航发动力", 35.6, 900),
-                ("600760", "中航沈飞", 38.9, 1000),
-                ("002179", "中航光电", 32.5, 600),
-                ("000768", "中航西飞", 23.4, 600),
-                ("600862", "中航高科", 18.9, 300),
-            ]
-        }
+        # 移除可能的后缀
+        if '.' in raw_code:
+            raw_code = raw_code.split('.')[0]
         
-        # 创建全市场列表
-        self.all_stocks = []
-        for sector, stocks in self.predefined_stocks.items():
-            for code, name, price, market_cap in stocks:
-                self.all_stocks.append({
-                    '代码': code,
-                    '名称': name,
-                    '板块': sector,
-                    '价格': price,
-                    '市值': market_cap
-                })
-    
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
-    def get_stock_list_from_alternative(self):
-        """从备用API获取股票列表"""
-        try:
-            # 尝试从东方财富备用API获取
-            url = "https://push2.eastmoney.com/api/qt/clist/get"
-            params = {
-                "pn": "1",
-                "pz": "1000",
-                "po": "1",
-                "np": "1",
-                "ut": "bd1d9ddb04089700cf9c27f6f7426281",
-                "fltt": "2",
-                "invt": "2",
-                "fid": "f3",
-                "fs": "m:0+t:6,m:0+t:13,m:0+t:80,m:1+t:2,m:1+t:23",
-                "fields": "f12,f14,f2,f3,f4,f20,f21",
-                "_": str(int(time.time() * 1000))
-            }
-            
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                "Referer": "https://quote.eastmoney.com/"
-            }
-            
-            response = requests.get(url, params=params, headers=headers, timeout=10)
-            if response.status_code == 200:
-                data = response.json()
-                stocks = []
-                for item in data.get("data", {}).get("diff", []):
-                    code = item.get("f12", "")
-                    name = item.get("f14", "")
-                    if code and name:
-                        stocks.append({"代码": code, "名称": name})
-                return pd.DataFrame(stocks), True
-        except:
-            pass
+        # 根据代码开头判断交易所
+        if raw_code.startswith("6") or raw_code.startswith("9"): 
+            suffix = ".SS"
+        elif raw_code.startswith("0") or raw_code.startswith("3"): 
+            suffix = ".SZ"
+        elif raw_code.startswith("4") or raw_code.startswith("8"): 
+            suffix = ".BJ"
+        else: 
+            suffix = ".SS"  # 默认上海交易所
         
-        # 如果失败，使用预定义数据
-        df = pd.DataFrame(self.all_stocks)
-        df['Display'] = df['代码'] + " | " + df['名称'] + " | " + df['板块']
-        return df, True
-    
-    def get_sector_components(self, sector_name: str) -> List[Tuple[str, str]]:
-        """获取板块成分股"""
-        if sector_name in self.predefined_stocks:
-            return [(code, name) for code, name, _, _ in self.predefined_stocks[sector_name]]
-        return []
+        return f"{raw_code}{suffix}", raw_name
     
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
     def get_stock_data(self, ticker: str, start: str, end: str):
@@ -245,50 +102,47 @@ class DataFetcher:
                 with open(cache_file, 'rb') as f:
                     cached_data = pickle.load(f)
                     if isinstance(cached_data, dict) and 'df' in cached_data:
-                        return cached_data['df'], cached_data.get('ticker', ticker)
+                        # 检查缓存是否过期（7天）
+                        cache_time = cached_data.get('timestamp', 0)
+                        if time.time() - cache_time < 7*24*3600:
+                            return cached_data['df'], cached_data.get('ticker', ticker)
             except:
                 pass
         
         try:
-            # 主数据源：yfinance
-            df = yf.download(ticker, start=start, end=end, interval="1d", 
-                           progress=False, auto_adjust=True, timeout=10)
+            # 尝试多个数据源
+            df = self._try_yfinance(ticker, start, end)
             
-            # 如果yfinance失败，尝试备用后缀
-            if df.empty or len(df) < 10:
+            if df is None or df.empty or len(df) < 60:
+                # 尝试切换后缀
                 base_code = ticker.split('.')[0]
                 if len(ticker.split('.')) > 1:
                     current_suffix = '.' + ticker.split('.')[1]
                     alt_suffix = '.SZ' if current_suffix == '.SS' else '.SS'
                     alt_ticker = base_code + alt_suffix
-                    df = yf.download(alt_ticker, start=start, end=end, 
-                                   progress=False, auto_adjust=True, timeout=10)
-                    if not df.empty and len(df) > 10:
+                    df = self._try_yfinance(alt_ticker, start, end)
+                    if df is not None and not df.empty and len(df) >= 60:
                         ticker = alt_ticker
             
-            if isinstance(df.columns, pd.MultiIndex):
-                try: 
-                    df.columns = df.columns.get_level_values(0)
-                except: 
-                    pass
-            
-            if len(df) < 60:
-                return None, ticker
-            
-            if 'Close' not in df.columns:
+            if df is None or df.empty or len(df) < 60:
                 return None, ticker
             
             # 特征工程
             data = df[['Close', 'High', 'Low', 'Volume']].copy()
             data['Log_Ret'] = np.log(data['Close'] / data['Close'].shift(1))
             data['Volatility'] = data['Log_Ret'].rolling(window=20).std()
-            data['Vol_Change'] = (data['Volume'] - data['Volume'].rolling(window=5).mean()) / data['Volume'].rolling(window=5).mean()
+            if 'Volume' in data.columns:
+                data['Vol_Change'] = (data['Volume'] - data['Volume'].rolling(window=5).mean()) / data['Volume'].rolling(window=5).mean()
             data.dropna(inplace=True)
             
             # 缓存数据
             try:
                 with open(cache_file, 'wb') as f:
-                    pickle.dump({'df': data, 'ticker': ticker}, f)
+                    pickle.dump({
+                        'df': data, 
+                        'ticker': ticker,
+                        'timestamp': time.time()
+                    }, f)
             except:
                 pass
             
@@ -297,45 +151,70 @@ class DataFetcher:
         except Exception as e:
             return None, ticker
     
-    def batch_download_data(self, tickers_list: List[Tuple[str, str]], start: str, end: str, max_workers: int = 4):
-        """批量下载数据"""
-        data_dict = {}
-        
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {}
-            for code, name in tickers_list:
-                ticker, _ = self.format_ticker_for_yfinance(code, name)
-                future = executor.submit(self.get_stock_data, ticker, start, end)
-                futures[future] = (code, name, ticker)
+    def _try_yfinance(self, ticker: str, start: str, end: str):
+        """尝试yfinance数据源"""
+        try:
+            df = yf.download(ticker, start=start, end=end, interval="1d", 
+                           progress=False, auto_adjust=True, timeout=10)
             
-            for future in concurrent.futures.as_completed(futures):
-                code, name, ticker = futures[future]
-                try:
-                    df, final_ticker = future.result()
-                    if df is not None and not df.empty:
-                        data_dict[code] = {"data": df, "name": name, "ticker": final_ticker}
-                except:
-                    continue
-        
-        return data_dict
+            if isinstance(df.columns, pd.MultiIndex):
+                try: 
+                    df.columns = df.columns.get_level_values(0)
+                except: 
+                    pass
+            
+            return df
+        except:
+            return None
     
-    def format_ticker_for_yfinance(self, raw_code: str, raw_name: str = "Unknown") -> Tuple[str, str]:
-        raw_code = str(raw_code).strip()
-        if raw_code.startswith("6") or raw_code.startswith("9"): 
-            suffix = ".SS"
-        elif raw_code.startswith("0") or raw_code.startswith("3"): 
-            suffix = ".SZ"
-        elif raw_code.startswith("4") or raw_code.startswith("8"): 
-            suffix = ".BJ"
-        else: 
-            suffix = ".SS"
-        return f"{raw_code}{suffix}", raw_name
+    def get_predefined_sectors(self):
+        """获取预定义板块信息"""
+        sectors = {
+            "白酒": ["000858", "600519", "002304", "000568", "600809"],
+            "半导体": ["688981", "002049", "603501", "300661", "002371"],
+            "新能源": ["300750", "002594", "002812", "002460", "300014"],
+            "医药": ["600276", "300760", "300015", "000538", "600085"],
+            "金融": ["601318", "600036", "601398", "601166", "600030"],
+            "消费": ["600887", "000651", "000333", "603288", "002557"],
+            "科技": ["002415", "002475", "300059", "300033", "002230"],
+            "光伏设备": ["601012", "300274", "002129", "688303", "300118"],
+            "汽车整车": ["601633", "600104", "000625", "002594", "601238"],
+            "军工": ["600893", "600760", "002179", "000768", "600862"],
+        }
+        return sectors
+    
+    def get_sector_stocks(self, sector_name: str):
+        """根据板块名称返回预设的股票列表"""
+        sectors = self.get_predefined_sectors()
+        sector_map = {
+            "白酒": [("000858", "五粮液"), ("600519", "贵州茅台"), ("002304", "洋河股份"), 
+                   ("000568", "泸州老窖"), ("600809", "山西汾酒")],
+            "半导体": [("688981", "中芯国际"), ("002049", "紫光国微"), ("603501", "韦尔股份"), 
+                     ("300661", "圣邦股份"), ("002371", "北方华创")],
+            "新能源": [("300750", "宁德时代"), ("002594", "比亚迪"), ("002812", "恩捷股份"), 
+                     ("002460", "赣锋锂业"), ("300014", "亿纬锂能")],
+            "医药": [("600276", "恒瑞医药"), ("300760", "迈瑞医疗"), ("300015", "爱尔眼科"), 
+                   ("000538", "云南白药"), ("600085", "同仁堂")],
+            "金融": [("601318", "中国平安"), ("600036", "招商银行"), ("601398", "工商银行"), 
+                   ("601166", "兴业银行"), ("600030", "中信证券")],
+            "消费": [("600887", "伊利股份"), ("000651", "格力电器"), ("000333", "美的集团"), 
+                   ("603288", "海天味业"), ("002557", "洽洽食品")],
+            "科技": [("002415", "海康威视"), ("002475", "立讯精密"), ("300059", "东方财富"), 
+                   ("300033", "同花顺"), ("002230", "科大讯飞")],
+            "光伏设备": [("601012", "隆基绿能"), ("300274", "阳光电源"), ("002129", "TCL中环"), 
+                      ("688303", "大全能源"), ("300118", "东方日升")],
+            "汽车整车": [("601633", "长城汽车"), ("600104", "上汽集团"), ("000625", "长安汽车"), 
+                      ("002594", "比亚迪"), ("601238", "广汽集团")],
+            "军工": [("600893", "航发动力"), ("600760", "中航沈飞"), ("002179", "中航光电"), 
+                   ("000768", "中航西飞"), ("600862", "中航高科")],
+        }
+        return sector_map.get(sector_name, [])
 
 # 初始化数据获取器
 data_fetcher = DataFetcher()
 
 # ==========================================
-# 2. 改进的贝叶斯HMM模型 (保留完整功能)
+# 2. 改进的贝叶斯HMM模型
 # ==========================================
 
 def calculate_state_conditional_returns(df: pd.DataFrame, regimes: np.ndarray, 
@@ -430,23 +309,80 @@ def train_bhmm_improved(df: pd.DataFrame, n_comps: int, rolling_window: int = 60
         return None
 
 # ==========================================
-# 3. 回测系统 (完整功能)
+# 3. 回测系统 (修复胜率计算)
 # ==========================================
 
 def backtest_strategy(df: pd.DataFrame, cost: float = 0.001) -> Tuple[pd.DataFrame, Dict]:
-    """完整回测策略"""
+    """回测策略 - 修复胜率计算"""
     threshold = 0.0005  # 5bps
     
+    # 生成信号
     df['Signal'] = 0
     df.loc[df['Bayes_Exp_Ret'] > threshold, 'Signal'] = 1
-    df.loc[df['Bayes_Exp_Ret'] < -threshold, 'Signal'] = -1  # 允许做空
     
+    # 计算仓位
     df['Position'] = df['Signal'].shift(1).fillna(0)
+    
+    # 计算交易成本
     t_cost = df['Position'].diff().abs() * cost
     
+    # 计算策略收益
     df['Strategy_Ret'] = (df['Position'] * df['Log_Ret']) - t_cost
+    
+    # 计算累计收益
     df['Cum_Bench'] = (1 + df['Log_Ret']).cumprod()
     df['Cum_Strat'] = (1 + df['Strategy_Ret']).cumprod()
+    
+    # === 修复胜率计算 ===
+    # 正确的交易识别方式：仓位变化表示交易
+    position_changes = df['Position'].diff().fillna(0)
+    buy_signals = position_changes > 0  # 买入信号
+    sell_signals = position_changes < 0  # 卖出信号
+    
+    # 计算交易结果
+    trades = []
+    entry_price = None
+    entry_date = None
+    
+    for i in range(1, len(df)):
+        if buy_signals.iloc[i] and entry_price is None:  # 开仓
+            entry_price = df['Close'].iloc[i]
+            entry_date = df.index[i]
+        
+        elif sell_signals.iloc[i] and entry_price is not None:  # 平仓
+            exit_price = df['Close'].iloc[i]
+            exit_date = df.index[i]
+            trade_return = (exit_price - entry_price) / entry_price
+            
+            trades.append({
+                'entry_date': entry_date,
+                'exit_date': exit_date,
+                'return': trade_return,
+                'winning': trade_return > 0
+            })
+            entry_price = None
+            entry_date = None
+    
+    # 如果有未平仓的交易，按最后一天结算
+    if entry_price is not None:
+        exit_price = df['Close'].iloc[-1]
+        exit_date = df.index[-1]
+        trade_return = (exit_price - entry_price) / entry_price
+        trades.append({
+            'entry_date': entry_date,
+            'exit_date': exit_date,
+            'return': trade_return,
+            'winning': trade_return > 0
+        })
+    
+    # 计算胜率
+    if trades:
+        winning_trades = sum(1 for trade in trades if trade['winning'])
+        win_rate = winning_trades / len(trades)
+        total_trades = len(trades)
+    else:
+        win_rate = 0
+        total_trades = 0
     
     # 计算性能指标
     total_ret = df['Cum_Strat'].iloc[-1] - 1
@@ -464,23 +400,18 @@ def backtest_strategy(df: pd.DataFrame, cost: float = 0.001) -> Tuple[pd.DataFra
     else:
         sharpe = 0
     
-    # 胜率
-    winning_trades = (df['Strategy_Ret'] > 0).sum()
-    total_trades = (df['Position'].diff() != 0).sum()
-    win_rate = winning_trades / max(total_trades, 1)
-    
-    # 卡尔玛比率
-    if max_dd != 0:
-        calmar = annual_ret / abs(max_dd)
-    else:
-        calmar = 0
-    
     # 索提诺比率
     negative_returns = df['Strategy_Ret'][df['Strategy_Ret'] < 0]
     if len(negative_returns) > 0 and negative_returns.std() != 0:
         sortino = (df['Strategy_Ret'].mean() * 252) / (negative_returns.std() * np.sqrt(252))
     else:
         sortino = sharpe
+    
+    # 卡尔玛比率
+    if max_dd != 0:
+        calmar = annual_ret / abs(max_dd)
+    else:
+        calmar = 0
     
     return df, {
         "Total Return": total_ret,
@@ -490,15 +421,18 @@ def backtest_strategy(df: pd.DataFrame, cost: float = 0.001) -> Tuple[pd.DataFra
         "Calmar": calmar,
         "Max Drawdown": max_dd,
         "Win Rate": win_rate,
-        "Total Trades": total_trades
+        "Total Trades": total_trades,
+        "Avg Trade Return": np.mean([t['return'] for t in trades]) if trades else 0,
+        "Max Win": max([t['return'] for t in trades]) if trades else 0,
+        "Max Loss": min([t['return'] for t in trades]) if trades else 0
     }
 
 # ==========================================
-# 4. AI 投顾 (完整功能)
+# 4. AI 投顾
 # ==========================================
 
 def get_ai_advice(df: pd.DataFrame, metrics: Dict, n_comps: int) -> Dict:
-    """完整AI投顾建议"""
+    """获取AI投顾建议"""
     if len(df) == 0:
         return {
             "title": "⚠️ 数据不足",
@@ -532,178 +466,76 @@ def get_ai_advice(df: pd.DataFrame, metrics: Dict, n_comps: int) -> Dict:
     
     # 计算风险指标
     recent_volatility = df['Volatility'].iloc[-20:].mean() if len(df) >= 20 else df['Volatility'].mean()
-    recent_max_dd = df['Cum_Strat'].iloc[-20:].min() if 'Cum_Strat' in df.columns else 0
     
     advice['risk_metrics'] = {
         "近期波动率": f"{recent_volatility:.2%}",
-        "近期最大回撤": f"{recent_max_dd:.2%}",
-        "模型置信度": f"{last_confidence:.1%}"
+        "模型置信度": f"{last_confidence:.1%}",
+        "Alpha信号": f"{last_alpha*10000:.1f}bps"
     }
     
     if last_regime == 0:  # 低波动状态
-        advice['risk_level'] = "低风险 (Low Risk)"
+        advice['risk_level'] = "低风险"
         if last_alpha > threshold:
-            advice['title'] = "🟢 积极建仓机会 (Accumulation Phase)"
+            advice['title'] = "🟢 积极建仓机会"
             advice['color'] = "#00E676"
             advice['bg_color'] = "rgba(0, 230, 118, 0.1)"
-            advice['summary'] = f"低波动稳态，预期Alpha: {last_alpha*10000:.1f}bps > 阈值5bps。置信度: {last_confidence:.1%}"
-            advice['action'] = "建议：分批买入，设置止损-3%，关注成交量放大"
+            advice['summary'] = f"低波动稳态，预期Alpha: {last_alpha*10000:.1f}bps > 阈值5bps"
+            advice['action'] = "建议：分批买入，设置止损-3%"
             advice['position'] = "70-90%"
         else:
-            advice['title'] = "🟡 观望/防守 (Defensive)"
+            advice['title'] = "🟡 观望/防守"
             advice['color'] = "#FFD600"
             advice['bg_color'] = "rgba(255, 214, 0, 0.1)"
-            advice['summary'] = f"低波动但预期收益不足 (Alpha: {last_alpha*10000:.1f}bps)。适宜防守"
-            advice['action'] = "建议：轻仓观察(10-20%)，等待突破信号"
+            advice['summary'] = f"低波动但预期收益不足 (Alpha: {last_alpha*10000:.1f}bps)"
+            advice['action'] = "建议：轻仓观察(10-20%)"
             advice['position'] = "10-20%"
             
     elif last_regime == n_comps - 1:  # 高波动状态
-        advice['risk_level'] = "高风险 (High Risk)"
+        advice['risk_level'] = "高风险"
         if last_alpha > threshold:
-            advice['title'] = "🔵 高风险机会 (High Risk Opportunity)"
+            advice['title'] = "🔵 高风险机会"
             advice['color'] = "#2962FF"
             advice['bg_color'] = "rgba(41, 98, 255, 0.1)"
             advice['summary'] = f"高波动中隐含机会，Alpha: {last_alpha*10000:.1f}bps"
-            advice['action'] = "建议：小仓位试探(20-30%)，严格止损-5%，快进快出"
+            advice['action'] = "建议：小仓位试探(20-30%)，严格止损-5%"
             advice['position'] = "20-30%"
         else:
-            advice['title'] = "🔴 极度风险预警 (Danger Zone)"
+            advice['title'] = "🔴 极度风险预警"
             advice['color'] = "#FF1744"
             advice['bg_color'] = "rgba(255, 23, 68, 0.1)"
             advice['summary'] = "剧烈波动模式，下跌风险极高"
-            advice['action'] = "建议：清仓避险，等待企稳信号"
+            advice['action'] = "建议：清仓避险"
             advice['position'] = "0%"
     else:  # 中间状态
-        advice['risk_level'] = "中风险 (Medium Risk)"
+        advice['risk_level'] = "中风险"
         if last_alpha > threshold:
-            advice['title'] = "🔵 趋势延续 (Trend Continuation)"
+            advice['title'] = "🔵 趋势延续"
             advice['color'] = "#2962FF"
             advice['bg_color'] = "rgba(41, 98, 255, 0.1)"
             advice['summary'] = f"趋势运行中，Alpha: {last_alpha*10000:.1f}bps"
-            advice['action'] = "建议：持有为主(50-70%)，跟踪止盈，关注趋势延续性"
+            advice['action'] = "建议：持有为主(50-70%)"
             advice['position'] = "50-70%"
         else:
-            advice['title'] = "🟠 减仓观望 (Reduce Exposure)"
+            advice['title'] = "🟠 减仓观望"
             advice['color'] = "#FF9100"
             advice['bg_color'] = "rgba(255, 145, 0, 0.1)"
-            advice['summary'] = "上涨动能衰竭，风险上升"
-            advice['action'] = "建议：逐步减仓至20-30%，锁定利润，观察调整深度"
+            advice['summary'] = "上涨动能衰竭"
+            advice['action'] = "建议：逐步减仓至20-30%"
             advice['position'] = "20-30%"
     
     return advice
 
 # ==========================================
-# 5. 高效市场扫描系统
-# ==========================================
-
-class MarketScanner:
-    """高效市场扫描系统"""
-    
-    def __init__(self):
-        self.fetcher = data_fetcher
-    
-    def scan_sector(self, sector_name: str, start_date: str, end_date: str, 
-                   n_components: int = 3, top_n: int = 10) -> pd.DataFrame:
-        """扫描板块"""
-        # 获取板块成分股
-        stocks = self.fetcher.get_sector_components(sector_name)
-        if not stocks:
-            return pd.DataFrame()
-        
-        # 批量下载数据
-        data_dict = self.fetcher.batch_download_data(stocks[:20], start_date, end_date, max_workers=4)
-        
-        results = []
-        for code, item in data_dict.items():
-            df = item["data"]
-            name = item["name"]
-            
-            if df is not None and len(df) > 100:
-                # 训练HMM模型
-                df_model = train_bhmm_improved(df, n_components)
-                
-                if df_model is not None:
-                    last_regime = int(df_model['Regime'].iloc[-1])
-                    last_alpha = df_model['Bayes_Exp_Ret'].iloc[-1]
-                    confidence = df_model['Regime_Confidence'].iloc[-1] if 'Regime_Confidence' in df_model.columns else 0
-                    
-                    # 计算技术指标
-                    recent_vol = df['Volatility'].iloc[-20:].mean()
-                    recent_ret = df['Log_Ret'].iloc[-5:].mean()
-                    rsi = self.calculate_rsi(df['Close']) if len(df) > 14 else 50
-                    
-                    # 综合评分
-                    score = self.calculate_score(last_alpha, last_regime, confidence, recent_vol, recent_ret, rsi)
-                    
-                    results.append({
-                        "代码": code,
-                        "名称": name,
-                        "状态": last_regime,
-                        "Alpha": last_alpha,
-                        "置信度": confidence,
-                        "波动率": recent_vol,
-                        "近期收益": recent_ret,
-                        "RSI": rsi,
-                        "综合评分": score,
-                        "最新价": df['Close'].iloc[-1],
-                        "成交量": df['Volume'].iloc[-1] if 'Volume' in df.columns else 0
-                    })
-        
-        if results:
-            results_df = pd.DataFrame(results)
-            return results_df.sort_values('综合评分', ascending=False).head(top_n)
-        return pd.DataFrame()
-    
-    def calculate_rsi(self, prices: pd.Series, period: int = 14) -> float:
-        """计算RSI"""
-        delta = prices.diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-        
-        if loss.iloc[-1] == 0:
-            return 100
-        rs = gain.iloc[-1] / loss.iloc[-1]
-        rsi = 100 - (100 / (1 + rs))
-        return rsi
-    
-    def calculate_score(self, alpha: float, regime: int, confidence: float, 
-                       volatility: float, recent_ret: float, rsi: float) -> float:
-        """计算综合评分"""
-        # Alpha权重 40%
-        alpha_score = alpha * 10000 * 4
-        
-        # 状态权重 20% (状态0最好，状态n-1最差)
-        regime_score = (1 - regime / 3) * 20
-        
-        # 置信度权重 15%
-        confidence_score = confidence * 15
-        
-        # 波动率权重 10% (低波动更好)
-        volatility_score = (1 - min(volatility * 100, 1)) * 10
-        
-        # 近期收益权重 10%
-        recent_ret_score = min(max(recent_ret * 10000, -10), 10)
-        
-        # RSI权重 5% (40-60最佳)
-        rsi_score = 5 - abs(rsi - 50) * 0.1
-        
-        total_score = alpha_score + regime_score + confidence_score + volatility_score + recent_ret_score + rsi_score
-        return max(min(total_score, 100), 0)
-
-# ==========================================
-# 6. 主程序逻辑 (完整功能)
+# 5. 主程序逻辑
 # ==========================================
 
 def main():
-    # 初始化扫描器
-    scanner = MarketScanner()
-    
     # 侧边栏通用配置
     with st.sidebar:
         st.title("🇨🇳 BHMM A-Share Pro Plus")
         app_mode = st.radio(
             "功能模式", 
-            ["🔎 单标的深度分析", "📡 板块智能扫描", "🌐 全市场筛选", "📊 策略回测优化"], 
+            ["🔎 自选股票分析", "📡 板块智能扫描"], 
             index=0
         )
         st.divider()
@@ -720,27 +552,69 @@ def main():
         st.divider()
         
         # 模式特定配置
-        if app_mode == "🔎 单标的深度分析":
-            st.caption("单标的深度分析")
+        if app_mode == "🔎 自选股票分析":
+            st.caption("自选股票分析")
             
-            # 获取股票列表
-            stock_list_df, _ = data_fetcher.get_stock_list_from_alternative()
+            # 两种输入方式：手动输入或从预设列表选择
+            input_mode = st.radio("输入方式", ["手动输入", "从列表选择"], index=0)
             
-            if not stock_list_df.empty:
-                selected = st.selectbox("选择股票", options=stock_list_df['Display'].tolist())
-                if selected:
-                    parts = selected.split(" | ")
-                    if len(parts) >= 2:
-                        c = parts[0]
-                        n = parts[1]
-                        target_ticker, target_name = data_fetcher.format_ticker_for_yfinance(c, n)
-                    else:
-                        target_ticker, target_name = None, None
+            if input_mode == "手动输入":
+                # 自由输入股票代码
+                stock_input = st.text_input(
+                    "输入股票代码",
+                    value="000858",
+                    help="支持格式：000858、000858.SZ、SZ000858"
+                )
+                
+                if stock_input:
+                    # 清理输入
+                    code = stock_input.strip().upper()
+                    if code.startswith('SZ'):
+                        code = code[2:] + '.SZ'
+                    elif code.startswith('SH'):
+                        code = code[2:] + '.SS'
+                    elif '.' not in code:
+                        # 根据开头判断
+                        if code.startswith('6'):
+                            code = code + '.SS'
+                        else:
+                            code = code + '.SZ'
+                    
+                    target_ticker, target_name = data_fetcher.format_ticker_for_yfinance(
+                        code.split('.')[0] if '.' in code else code,
+                        f"股票{code}"
+                    )
                 else:
                     target_ticker, target_name = None, None
-            else:
-                mc = st.text_input("股票代码", value="000858.SZ")
-                target_ticker, target_name = data_fetcher.format_ticker_for_yfinance(mc, mc)
+                    
+            else:  # 从列表选择
+                # 预设的常用股票列表
+                preset_stocks = [
+                    ("000858", "五粮液"),
+                    ("600519", "贵州茅台"),
+                    ("000651", "格力电器"),
+                    ("000333", "美的集团"),
+                    ("300750", "宁德时代"),
+                    ("002594", "比亚迪"),
+                    ("601318", "中国平安"),
+                    ("600036", "招商银行"),
+                    ("600276", "恒瑞医药"),
+                    ("300760", "迈瑞医疗"),
+                    ("002415", "海康威视"),
+                    ("002475", "立讯精密"),
+                    ("688981", "中芯国际"),
+                    ("601012", "隆基绿能"),
+                    ("000002", "万科A"),
+                ]
+                
+                stock_options = [f"{code} | {name}" for code, name in preset_stocks]
+                selected_stock = st.selectbox("选择股票", options=stock_options)
+                
+                if selected_stock:
+                    code, name = selected_stock.split(" | ")
+                    target_ticker, target_name = data_fetcher.format_ticker_for_yfinance(code, name)
+                else:
+                    target_ticker, target_name = None, None
             
             # 高级参数
             with st.expander("高级参数"):
@@ -751,7 +625,7 @@ def main():
             
         elif app_mode == "📡 板块智能扫描":
             st.caption("板块智能扫描")
-            SECTORS = list(data_fetcher.predefined_stocks.keys())
+            SECTORS = list(data_fetcher.get_predefined_sectors().keys())
             target_sector = st.selectbox("选择板块", SECTORS)
             
             with st.expander("扫描配置"):
@@ -759,40 +633,22 @@ def main():
                 min_confidence = st.slider("最小置信度(%)", 50, 90, 70) / 100
             
             scan_btn = st.button("📡 开始智能扫描", type="primary", use_container_width=True)
-            
-        elif app_mode == "🌐 全市场筛选":
-            st.caption("全市场筛选")
-            filter_type = st.selectbox("筛选类型", ["Alpha强势股", "低波稳健股", "高置信度股", "综合评分"])
-            
-            with st.expander("筛选条件"):
-                min_alpha = st.number_input("最小Alpha(bps)", value=5.0, min_value=0.0, max_value=20.0)
-                max_volatility = st.number_input("最大波动率(%)", value=3.0, min_value=0.5, max_value=10.0) / 100
-                min_confidence = st.number_input("最小置信度(%)", value=70, min_value=50, max_value=95) / 100
-            
-            filter_btn = st.button("🌐 开始全市场筛选", type="primary", use_container_width=True)
-            
-        elif app_mode == "📊 策略回测优化":
-            st.caption("策略回测优化")
-            optimize_type = st.selectbox("优化目标", ["夏普比率", "卡尔玛比率", "年化收益", "综合评分"])
-            
-            with st.expander("优化参数"):
-                threshold_range = st.slider("信号阈值范围(bps)", 1, 20, (2, 10))
-                window_range = st.slider("观察窗口范围(日)", 20, 100, (40, 80))
-            
-            optimize_btn = st.button("🔧 开始参数优化", type="primary", use_container_width=True)
     
-    # ========== 模式A: 单标的深度分析 ==========
-    if app_mode == "🔎 单标的深度分析":
-        st.title("🔎 A-Share 单标的深度分析")
+    # ========== 模式A: 自选股票分析 ==========
+    if app_mode == "🔎 自选股票分析":
+        st.title("🔎 A-Share 自选股票深度分析")
         
         if run_btn and target_ticker:
-            with st.spinner(f"正在深度分析 {target_name}..."):
+            with st.spinner(f"正在深度分析 {target_name if target_name else target_ticker}..."):
                 # 获取数据
                 df, final_ticker = data_fetcher.get_stock_data(target_ticker, start_date, end_date)
                 
                 if df is None or df.empty:
-                    st.error("无法获取股票数据，请检查代码是否正确")
+                    st.error(f"无法获取股票数据，请检查代码 {target_ticker} 是否正确")
                     st.stop()
+                
+                if len(df) < 100:
+                    st.warning(f"数据量较少({len(df)}天)，分析结果可能不准确")
                 
                 # 训练改进的BHMM模型
                 df_model = train_bhmm_improved(df, n_components)
@@ -815,9 +671,9 @@ def main():
                 col4.metric("最大回撤", f"{metrics['Max Drawdown']*100:.1f}%")
                 
                 col5, col6, col7 = st.columns(3)
-                col5.metric("索提诺比率", f"{metrics['Sortino']:.2f}")
-                col6.metric("卡尔玛比率", f"{metrics['Calmar']:.2f}")
-                col7.metric("胜率", f"{metrics['Win Rate']*100:.1f}%")
+                col5.metric("胜率", f"{metrics['Win Rate']*100:.1f}%")
+                col6.metric("交易次数", f"{metrics['Total Trades']}")
+                col7.metric("平均收益", f"{metrics['Avg Trade Return']*100:.1f}%")
                 
                 # 显示AI建议
                 st.markdown(f"""
@@ -832,13 +688,13 @@ def main():
                     <div style="margin-top:15px; display:grid; grid-template-columns:repeat(3, 1fr); gap:10px;">
                         <div style="color:#888;">风险等级: {ai_advice['risk_level']}</div>
                         <div style="color:#888;">模型置信度: {ai_advice['confidence']}</div>
-                        <div style="color:#888;">近期波动率: {ai_advice['risk_metrics'].get('近期波动率', 'N/A')}</div>
+                        <div style="color:#888;">Alpha信号: {ai_advice['risk_metrics'].get('Alpha信号', 'N/A')}</div>
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
                 
                 # 多维度图表展示
-                tab1, tab2, tab3, tab4 = st.tabs(["📈 价格与状态", "📊 策略收益", "📉 风险分析", "📋 详细数据"])
+                tab1, tab2, tab3 = st.tabs(["📈 价格与状态", "📊 策略收益", "📉 风险分析"])
                 
                 with tab1:
                     fig = make_subplots(
@@ -859,8 +715,7 @@ def main():
                                     y=df_result['Close'][mask], 
                                     mode='markers',
                                     marker=dict(size=6, color=colors[i % 4], symbol='circle'),
-                                    name=f"状态 {i}",
-                                    legendgroup=f"state_{i}"
+                                    name=f"状态 {i}"
                                 ),
                                 row=1, col=1
                             )
@@ -882,11 +737,14 @@ def main():
                             x=df_result.index, 
                             y=df_result['Bayes_Exp_Ret'] * 10000,
                             line=dict(color='#FF5252', width=1),
-                            name="Alpha信号(bps)",
-                            yaxis="y2"
+                            name="Alpha信号(bps)"
                         ),
                         row=2, col=1
                     )
+                    
+                    # 添加阈值线
+                    fig.add_hline(y=5, line=dict(color="white", width=1, dash="dash"), 
+                                 row=2, col=1, annotation_text="阈值 5bps")
                     
                     # 置信度
                     if 'Regime_Confidence' in df_result.columns:
@@ -908,14 +766,7 @@ def main():
                         paper_bgcolor='rgba(0,0,0,0)',
                         plot_bgcolor='rgba(0,0,0,0)',
                         hovermode="x unified",
-                        showlegend=True,
-                        legend=dict(
-                            orientation="h",
-                            yanchor="bottom",
-                            y=1.02,
-                            xanchor="right",
-                            x=1
-                        )
+                        showlegend=True
                     )
                     
                     fig.update_yaxes(title_text="价格", row=1, col=1)
@@ -943,28 +794,32 @@ def main():
                         line=dict(color='#FF5252', width=2.5)
                     ))
                     
-                    # 持仓区域
-                    positions = df_result['Position']
-                    buy_signals = positions.diff() > 0
-                    sell_signals = positions.diff() < 0
+                    # 识别交易信号点
+                    position_changes = df_result['Position'].diff().fillna(0)
+                    buy_points = position_changes > 0
+                    sell_points = position_changes < 0
                     
-                    fig_eq.add_trace(go.Scatter(
-                        x=df_result.index[buy_signals],
-                        y=df_result['Cum_Strat'][buy_signals],
-                        mode='markers',
-                        marker=dict(size=10, color='#00E676', symbol='triangle-up'),
-                        name='买入信号',
-                        showlegend=True
-                    ))
+                    # 买入信号
+                    if buy_points.any():
+                        fig_eq.add_trace(go.Scatter(
+                            x=df_result.index[buy_points],
+                            y=df_result['Cum_Strat'][buy_points],
+                            mode='markers',
+                            marker=dict(size=10, color='#00E676', symbol='triangle-up'),
+                            name='买入信号',
+                            showlegend=True
+                        ))
                     
-                    fig_eq.add_trace(go.Scatter(
-                        x=df_result.index[sell_signals],
-                        y=df_result['Cum_Strat'][sell_signals],
-                        mode='markers',
-                        marker=dict(size=10, color='#FF1744', symbol='triangle-down'),
-                        name='卖出信号',
-                        showlegend=True
-                    ))
+                    # 卖出信号
+                    if sell_points.any():
+                        fig_eq.add_trace(go.Scatter(
+                            x=df_result.index[sell_points],
+                            y=df_result['Cum_Strat'][sell_points],
+                            mode='markers',
+                            marker=dict(size=10, color='#FF1744', symbol='triangle-down'),
+                            name='卖出信号',
+                            showlegend=True
+                        ))
                     
                     fig_eq.update_layout(
                         template="plotly_dark",
@@ -978,52 +833,44 @@ def main():
                     
                     st.plotly_chart(fig_eq, use_container_width=True)
                     
-                    # 收益分布图
-                    st.subheader("📊 收益分布分析")
+                    # 交易统计
+                    st.subheader("📊 交易统计")
                     
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        # 月度收益热图
-                        df_result['YearMonth'] = df_result.index.strftime('%Y-%m')
-                        monthly_returns = df_result.groupby('YearMonth')['Strategy_Ret'].sum()
-                        
-                        fig_heatmap = go.Figure(data=go.Heatmap(
-                            z=[monthly_returns.values],
-                            x=monthly_returns.index,
-                            colorscale='RdYlGn',
-                            showscale=True,
-                            zmid=0
-                        ))
-                        
-                        fig_heatmap.update_layout(
-                            template="plotly_dark",
-                            height=300,
-                            title="月度收益热图",
-                            xaxis_title="月份",
-                            yaxis=dict(showticklabels=False)
-                        )
-                        st.plotly_chart(fig_heatmap, use_container_width=True)
+                    if metrics['Total Trades'] > 0:
+                        col1, col2, col3 = st.columns(3)
+                        col1.metric("最大盈利", f"{metrics['Max Win']*100:.1f}%")
+                        col2.metric("最大亏损", f"{metrics['Max Loss']*100:.1f}%")
+                        col3.metric("盈亏比", 
+                                  f"{(metrics['Avg Trade Return'] if metrics['Avg Trade Return'] > 0 else 0) / abs(metrics['Max Loss']) if metrics['Max Loss'] < 0 else 'N/A':.2f}")
                     
-                    with col2:
-                        # 收益直方图
-                        fig_hist = go.Figure(data=[go.Histogram(
-                            x=df_result['Strategy_Ret'] * 100,
-                            nbinsx=30,
-                            marker_color='#FF5252',
-                            opacity=0.7
-                        )])
-                        
-                        fig_hist.update_layout(
-                            template="plotly_dark",
-                            height=300,
-                            title="日收益分布",
-                            xaxis_title="日收益(%)",
-                            yaxis_title="频数"
-                        )
-                        st.plotly_chart(fig_hist, use_container_width=True)
+                    # 月度收益分析
+                    st.subheader("📅 月度收益分析")
+                    
+                    df_monthly = df_result.copy()
+                    df_monthly['YearMonth'] = df_monthly.index.strftime('%Y-%m')
+                    monthly_returns = df_monthly.groupby('YearMonth')['Strategy_Ret'].sum()
+                    
+                    fig_monthly = go.Figure(data=[go.Bar(
+                        x=monthly_returns.index,
+                        y=monthly_returns.values * 100,
+                        marker_color=np.where(monthly_returns.values > 0, '#00E676', '#FF1744'),
+                        text=[f'{x:.1f}%' for x in monthly_returns.values * 100],
+                        textposition='auto',
+                    )])
+                    
+                    fig_monthly.update_layout(
+                        template="plotly_dark",
+                        height=400,
+                        title="月度收益",
+                        xaxis_title="月份",
+                        yaxis_title="收益(%)",
+                        showlegend=False
+                    )
+                    
+                    st.plotly_chart(fig_monthly, use_container_width=True)
                 
                 with tab3:
-                    st.subheader("📉 风险指标分析")
+                    st.subheader("📉 风险分析")
                     
                     # 回撤分析
                     cumulative = df_result['Cum_Strat']
@@ -1051,21 +898,26 @@ def main():
                     st.plotly_chart(fig_dd, use_container_width=True)
                     
                     # 滚动风险指标
-                    st.subheader("📈 滚动窗口分析")
+                    st.subheader("📈 滚动窗口风险指标")
                     
                     rolling_window = 60
                     df_rolling = df_result.copy()
+                    
+                    # 滚动夏普
                     df_rolling['Rolling_Sharpe'] = df_rolling['Strategy_Ret'].rolling(rolling_window).apply(
                         lambda x: (x.mean() * 252) / (x.std() * np.sqrt(252)) if x.std() > 0 else 0
                     )
-                    df_rolling['Rolling_Return'] = df_rolling['Strategy_Ret'].rolling(rolling_window).mean() * 252 * 100
-                    df_rolling['Rolling_Volatility'] = df_rolling['Strategy_Ret'].rolling(rolling_window).std() * np.sqrt(252) * 100
+                    
+                    # 滚动最大回撤
+                    df_rolling['Rolling_Cum'] = (1 + df_rolling['Strategy_Ret']).rolling(rolling_window).apply(lambda x: x.prod())
+                    df_rolling['Rolling_Max'] = df_rolling['Rolling_Cum'].rolling(rolling_window, min_periods=1).max()
+                    df_rolling['Rolling_DD'] = (df_rolling['Rolling_Cum'] - df_rolling['Rolling_Max']) / df_rolling['Rolling_Max'] * 100
                     
                     fig_rolling = make_subplots(
                         rows=2, cols=1,
                         shared_xaxes=True,
                         vertical_spacing=0.1,
-                        subplot_titles=("滚动夏普比率", "滚动年化收益与波动率")
+                        subplot_titles=("滚动夏普比率", "滚动最大回撤")
                     )
                     
                     fig_rolling.add_trace(
@@ -1081,259 +933,140 @@ def main():
                     fig_rolling.add_trace(
                         go.Scatter(
                             x=df_rolling.index,
-                            y=df_rolling['Rolling_Return'],
+                            y=df_rolling['Rolling_DD'],
                             line=dict(color='#FF5252', width=2),
-                            name='滚动年化收益(%)',
-                            yaxis='y2'
-                        ),
-                        row=2, col=1
-                    )
-                    
-                    fig_rolling.add_trace(
-                        go.Scatter(
-                            x=df_rolling.index,
-                            y=df_rolling['Rolling_Volatility'],
-                            line=dict(color='#6495ED', width=2),
-                            name='滚动波动率(%)',
-                            fill='tonexty',
-                            fillcolor='rgba(100, 149, 237, 0.2)',
-                            yaxis='y3'
+                            name='滚动最大回撤(%)',
+                            fill='tozeroy',
+                            fillcolor='rgba(255, 82, 82, 0.2)'
                         ),
                         row=2, col=1
                     )
                     
                     fig_rolling.update_layout(
                         template="plotly_dark",
-                        height=600,
+                        height=500,
                         paper_bgcolor='rgba(0,0,0,0)',
                         plot_bgcolor='rgba(0,0,0,0)',
-                        hovermode="x unified",
-                        showlegend=True
+                        hovermode="x unified"
                     )
                     
                     fig_rolling.update_yaxes(title_text="夏普比率", row=1, col=1)
-                    fig_rolling.update_yaxes(title_text="年化收益(%)", row=2, col=1)
+                    fig_rolling.update_yaxes(title_text="回撤(%)", row=2, col=1)
                     
                     st.plotly_chart(fig_rolling, use_container_width=True)
-                
-                with tab4:
-                    # 显示详细数据
-                    display_cols = ['Close', 'Log_Ret', 'Volatility', 'Regime', 
-                                  'Regime_Confidence', 'Bayes_Exp_Ret', 'Signal', 'Position', 'Strategy_Ret']
-                    
-                    available_cols = [col for col in display_cols if col in df_result.columns]
-                    display_df = df_result[available_cols].copy()
-                    
-                    # 格式化显示
-                    format_dict = {
-                        'Close': '{:.2f}',
-                        'Log_Ret': '{:.4f}',
-                        'Volatility': '{:.4f}',
-                        'Regime_Confidence': '{:.1%}',
-                        'Bayes_Exp_Ret': '{:.2f}bps',
-                        'Strategy_Ret': '{:.4f}'
-                    }
-                    
-                    # 转换单位
-                    if 'Bayes_Exp_Ret' in display_df.columns:
-                        display_df['Bayes_Exp_Ret'] = display_df['Bayes_Exp_Ret'] * 10000
-                    
-                    styled_df = display_df.tail(100).style.format(format_dict)
-                    
-                    st.dataframe(styled_df, use_container_width=True, height=400)
-                    
-                    # 下载数据
-                    csv = display_df.to_csv(index=True).encode('utf-8')
-                    st.download_button(
-                        label="📥 下载详细数据(CSV)",
-                        data=csv,
-                        file_name=f"{target_ticker.split('.')[0]}_analysis_{datetime.now().strftime('%Y%m%d')}.csv",
-                        mime="text/csv",
-                        use_container_width=True
-                    )
         
         elif run_btn:
-            st.warning("请选择有效的股票代码")
+            st.warning("请输入有效的股票代码")
         else:
-            st.info("👈 请在侧边栏选择股票并开始深度分析")
+            st.info("👈 请在侧边栏输入或选择股票代码并开始分析")
     
     # ========== 模式B: 板块智能扫描 ==========
     elif app_mode == "📡 板块智能扫描":
         st.title(f"📡 板块智能扫描: {target_sector}")
         
         if scan_btn:
-            with st.spinner(f"正在智能扫描 {target_sector} 板块..."):
-                # 执行扫描
-                results = scanner.scan_sector(target_sector, start_date, end_date, n_components, top_n)
+            with st.spinner(f"正在扫描 {target_sector} 板块..."):
+                # 获取板块股票
+                sector_stocks = data_fetcher.get_sector_stocks(target_sector)
                 
-                if results.empty:
-                    st.error(f"未在 {target_sector} 板块发现符合条件的股票")
+                if not sector_stocks:
+                    st.error(f"未找到 {target_sector} 板块数据")
                     st.stop()
                 
-                st.success(f"扫描完成！发现 {len(results)} 只优质标的")
+                results = []
+                progress_bar = st.progress(0)
                 
-                # 显示扫描结果
-                st.subheader("🏆 板块优质标的推荐")
-                
-                # 按状态分组显示
-                for state in range(n_components):
-                    state_results = results[results['状态'] == state]
-                    if len(state_results) > 0:
-                        if state == 0:
-                            title = f"📈 状态{state}: 低波建仓机会 (共{len(state_results)}只)"
-                        elif state == n_components - 1:
-                            title = f"⚡ 状态{state}: 高波交易机会 (共{len(state_results)}只)"
-                        else:
-                            title = f"📊 状态{state}: 趋势运行标的 (共{len(state_results)}只)"
+                for idx, (code, name) in enumerate(sector_stocks):
+                    try:
+                        ticker, _ = data_fetcher.format_ticker_for_yfinance(code, name)
+                        df, _ = data_fetcher.get_stock_data(ticker, start_date, end_date)
                         
-                        with st.expander(title):
-                            for _, row in state_results.iterrows():
-                                alpha_color = "#00E676" if row['Alpha'] > 0.0005 else "#FF1744"
-                                alpha_class = "positive-alpha" if row['Alpha'] > 0.0005 else "negative-alpha"
+                        if df is not None and len(df) > 100:
+                            df_model = train_bhmm_improved(df, n_components)
+                            
+                            if df_model is not None:
+                                last_regime = int(df_model['Regime'].iloc[-1])
+                                last_alpha = df_model['Bayes_Exp_Ret'].iloc[-1]
+                                confidence = df_model['Regime_Confidence'].iloc[-1] if 'Regime_Confidence' in df_model.columns else 0
                                 
-                                col1, col2, col3, col4 = st.columns([3, 2, 2, 2])
+                                # 计算技术指标
+                                recent_vol = df['Volatility'].iloc[-20:].mean() if len(df) >= 20 else df['Volatility'].mean()
+                                recent_ret = df['Log_Ret'].iloc[-5:].mean() if len(df) >= 5 else 0
                                 
-                                with col1:
-                                    st.markdown(f"**{row['名称']}** ({row['代码']})")
+                                # 综合评分
+                                score = last_alpha * 10000  # 基础分
+                                if last_regime == 0:
+                                    score += 20  # 低波动加分
+                                if confidence > 0.7:
+                                    score += 10  # 高置信度加分
+                                if recent_vol < 0.02:
+                                    score += 5  # 低波动率加分
                                 
-                                with col2:
-                                    st.metric("Alpha", f"{row['Alpha']*10000:.1f}bps", 
-                                            delta_color="normal" if row['Alpha'] > 0 else "inverse")
-                                
-                                with col3:
-                                    st.metric("置信度", f"{row['置信度']:.1%}")
-                                
-                                with col4:
-                                    st.metric("综合评分", f"{row['综合评分']:.1f}")
-                
-                # 详细数据表
-                st.subheader("📋 详细扫描数据")
-                
-                display_results = results.copy()
-                display_results['Alpha(bps)'] = display_results['Alpha'] * 10000
-                display_results['近期收益(bps)'] = display_results['近期收益'] * 10000
-                display_results['波动率(%)'] = display_results['波动率'] * 100
-                
-                display_cols = ['代码', '名称', '状态', 'Alpha(bps)', '置信度', '波动率(%)', 
-                              '近期收益(bps)', 'RSI', '综合评分', '最新价']
-                
-                styled_df = display_results[display_cols].style.format({
-                    'Alpha(bps)': '{:.1f}',
-                    '置信度': '{:.1%}',
-                    '波动率(%)': '{:.2f}',
-                    '近期收益(bps)': '{:.1f}',
-                    'RSI': '{:.1f}',
-                    '综合评分': '{:.1f}',
-                    '最新价': '{:.2f}'
-                }).background_gradient(
-                    subset=['Alpha(bps)', '综合评分'], 
-                    cmap='RdYlGn'
-                )
-                
-                st.dataframe(styled_df, use_container_width=True, height=400)
-                
-                # 可视化分析
-                st.subheader("📊 板块扫描可视化")
-                
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    # Alpha分布
-                    fig_alpha = go.Figure(data=[go.Histogram(
-                        x=results['Alpha'] * 10000,
-                        nbinsx=20,
-                        marker_color='#FF5252',
-                        opacity=0.7,
-                        name='Alpha分布'
-                    )])
+                                results.append({
+                                    "代码": code,
+                                    "名称": name,
+                                    "状态": last_regime,
+                                    "Alpha(bps)": last_alpha * 10000,
+                                    "置信度": confidence,
+                                    "波动率": recent_vol,
+                                    "近期收益(bps)": recent_ret * 10000,
+                                    "综合评分": score,
+                                    "最新价": df['Close'].iloc[-1] if 'Close' in df.columns else 0
+                                })
+                    except:
+                        continue
                     
-                    fig_alpha.update_layout(
-                        template="plotly_dark",
-                        height=300,
-                        title="Alpha分布(bps)",
-                        xaxis_title="Alpha(bps)",
-                        yaxis_title="数量"
+                    progress_bar.progress((idx + 1) / len(sector_stocks))
+                
+                progress_bar.empty()
+                
+                if results:
+                    results_df = pd.DataFrame(results)
+                    results_df = results_df.sort_values('综合评分', ascending=False)
+                    
+                    st.success(f"扫描完成！发现 {len(results_df)} 只标的")
+                    
+                    # 显示结果
+                    st.subheader("🏆 优质标的推荐")
+                    
+                    for _, row in results_df.iterrows():
+                        state_color = ['#00E676', '#FFD600', '#FF1744', '#AA00FF'][int(row['状态']) % 4]
+                        
+                        col1, col2, col3, col4 = st.columns([3, 2, 2, 2])
+                        
+                        with col1:
+                            st.markdown(f"**{row['名称']}** ({row['代码']})")
+                        
+                        with col2:
+                            st.metric("Alpha", f"{row['Alpha(bps)']:.1f}bps", 
+                                    delta_color="normal" if row['Alpha(bps)'] > 0 else "inverse")
+                        
+                        with col3:
+                            st.metric("状态", f"{int(row['状态'])}", 
+                                    delta_color="normal" if row['状态'] == 0 else "off")
+                        
+                        with col4:
+                            st.metric("评分", f"{row['综合评分']:.1f}")
+                    
+                    # 详细数据
+                    st.subheader("📋 详细数据")
+                    styled_df = results_df.style.format({
+                        'Alpha(bps)': '{:.1f}',
+                        '置信度': '{:.1%}',
+                        '波动率': '{:.4f}',
+                        '近期收益(bps)': '{:.1f}',
+                        '综合评分': '{:.1f}',
+                        '最新价': '{:.2f}'
+                    }).background_gradient(
+                        subset=['Alpha(bps)', '综合评分'], 
+                        cmap='RdYlGn'
                     )
-                    st.plotly_chart(fig_alpha, use_container_width=True)
-                
-                with col2:
-                    # 状态分布
-                    state_counts = results['状态'].value_counts().sort_index()
-                    colors = ['#00E676', '#FFD600', '#FF1744', '#AA00FF']
                     
-                    fig_state = go.Figure(data=[go.Pie(
-                        labels=[f"状态{i}" for i in state_counts.index],
-                        values=state_counts.values,
-                        marker=dict(colors=[colors[i % 4] for i in state_counts.index]),
-                        hole=0.4
-                    )])
-                    
-                    fig_state.update_layout(
-                        template="plotly_dark",
-                        height=300,
-                        title="状态分布",
-                        showlegend=True
-                    )
-                    st.plotly_chart(fig_state, use_container_width=True)
-                
-                # 下载结果
-                csv = results.to_csv(index=False).encode('utf-8')
-                st.download_button(
-                    label="📥 下载完整扫描结果(CSV)",
-                    data=csv,
-                    file_name=f"{target_sector}_scan_{datetime.now().strftime('%Y%m%d')}.csv",
-                    mime="text/csv",
-                    use_container_width=True
-                )
+                    st.dataframe(styled_df, use_container_width=True, height=400)
+                else:
+                    st.warning("未发现符合条件的标的")
         else:
-            st.info("👈 请在侧边栏选择板块并开始智能扫描")
-    
-    # ========== 模式C: 全市场筛选 ==========
-    elif app_mode == "🌐 全市场筛选":
-        st.title("🌐 全市场智能筛选")
-        
-        if filter_btn:
-            st.info("全市场筛选功能正在开发中...")
-            st.markdown("""
-            ### 🚧 即将上线功能
-            1. **Alpha强势股筛选** - 筛选高Alpha且稳定的标的
-            2. **低波稳健股筛选** - 状态0且波动率低的防御型标的
-            3. **高置信度股筛选** - 模型置信度超过阈值的标的
-            4. **综合评分筛选** - 多维度综合评分排名
-            
-            ### 📊 筛选维度
-            - Alpha信号强度
-            - 波动率控制
-            - 模型置信度
-            - 技术指标(RSI, MACD等)
-            - 资金流向
-            - 板块轮动
-            """)
-        else:
-            st.info("👈 请在侧边栏配置筛选条件")
-    
-    # ========== 模式D: 策略回测优化 ==========
-    elif app_mode == "📊 策略回测优化":
-        st.title("📊 策略回测优化")
-        
-        if optimize_btn:
-            st.info("策略回测优化功能正在开发中...")
-            st.markdown("""
-            ### 🚧 即将上线功能
-            1. **参数网格搜索** - 自动寻找最优参数组合
-            2. **多目标优化** - 夏普、回撤、收益多目标平衡
-            3. **过拟合检测** - 交叉验证防止过拟合
-            4. **参数稳定性测试** - 检验参数鲁棒性
-            
-            ### 🔧 可优化参数
-            - 信号阈值 (1-20bps)
-            - 观察窗口 (20-100日)
-            - 止损止盈比例
-            - 仓位管理参数
-            - 交易频率控制
-            """)
-        else:
-            st.info("👈 请在侧边栏配置优化参数")
+            st.info("👈 请在侧边栏选择板块并开始扫描")
 
 if __name__ == "__main__":
     main()
